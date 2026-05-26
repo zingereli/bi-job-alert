@@ -2,7 +2,7 @@ name: BI Jobs Alert – Jerusalem
 
 on:
   schedule:
-    - cron: "0 * * * *"   # כל שעה
+    - cron: "0 6 * * *"   # כל יום ב-09:00 שעון ישראל (06:00 UTC)
   workflow_dispatch:
 
 jobs:
