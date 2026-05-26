@@ -14,6 +14,11 @@ KEYWORDS = [
     "data bi", "bi engineer",
 ]
 LOCATION_KEYWORDS = ["ירושלים", "jerusalem"]
+# משרות שמיקומן האמיתי בחו"ל למרות שהחברה בירושלים
+RELOCATION_BLACKLIST = re.compile(
+    r'relocation|bangkok|abroad|overseas|singapore|london|new york|berlin|amsterdam',
+    re.IGNORECASE
+)
 MIN_EXP_YEARS    = 3
 SEEN_JOBS_FILE   = "seen_jobs.json"
 
@@ -73,6 +78,9 @@ def is_bi(text):
 def is_jerusalem(text):
     t = text.lower()
     return any(l in t for l in LOCATION_KEYWORDS)
+
+def is_relocation_job(title):
+    return bool(RELOCATION_BLACKLIST.search(title))
 
 def send_telegram(msg):
     try:
@@ -282,6 +290,9 @@ async def scrape_linkedin(page):
                     continue
                 if not is_jerusalem(location):
                     continue
+                if is_relocation_job(title):
+                    print(f"    ⏩ משרת relocation, מדלג: {title}")
+                    continue
 
                 card_text = await card.inner_text()
                 exp = meets_experience(card_text)
@@ -343,6 +354,52 @@ async def scrape_indeed(page):
                 jobs.append(make_job(title, company, location or "ירושלים", href, "Indeed", card_text))
         except Exception as e:
             print(f"  ⚠️ Indeed [{q}]: {e}")
+    return jobs
+
+# ─── JobNet ───────────────────────────────────────────────
+async def scrape_jobnet(page):
+    jobs = []
+    queries = ["BI Developer", "BI Team Lead", "Business Intelligence"]
+    for q in queries:
+        url = (f"https://www.jobnet.co.il/Jobs/SearchJobs"
+               f"?freeText={requests.utils.quote(q)}&cityId=3000")
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(4000)
+            html = await page.content()
+            print(f"  [JobNet/{q}] HTML: {len(html)}")
+
+            cards = await page.query_selector_all(
+                "a[href*='JobId'], a[href*='jobId'], a[href*='/job/'], "
+                "[class*='job-item'], [class*='jobItem'], [class*='job_row'], article"
+            )
+            print(f"  [JobNet/{q}] {len(cards)} כרטיסיות")
+
+            seen_titles = set()
+            for card in cards:
+                title = (await card.inner_text()).strip().splitlines()[0].strip()
+                href  = await card.get_attribute("href") or ""
+                if not title or len(title) < 4 or title in seen_titles:
+                    continue
+                if not is_bi(title):
+                    continue
+                if is_relocation_job(title):
+                    continue
+                seen_titles.add(title)
+                if href and not href.startswith("http"):
+                    href = "https://www.jobnet.co.il" + href
+
+                parent_text = await card.evaluate(
+                    "el => el.closest('li, div, article, tr')?.innerText || el.innerText || ''"
+                )
+                exp = meets_experience(parent_text)
+                if exp is False:
+                    print(f"    ⏩ ניסיון נמוך, מדלג: {title}")
+                    continue
+
+                jobs.append(make_job(title, "JobNet", "ירושלים", href, "JobNet", parent_text))
+        except Exception as e:
+            print(f"  ⚠️ JobNet [{q}]: {e}")
     return jobs
 
 # ─── SecretHunter ─────────────────────────────────────────
@@ -419,6 +476,7 @@ async def main_async():
             ("JobMaster",    scrape_jobmaster),
             ("LinkedIn",     scrape_linkedin),
             ("Indeed",       scrape_indeed),
+            ("JobNet",       scrape_jobnet),
             ("SecretHunter", scrape_secrethunter),
         ]
 
